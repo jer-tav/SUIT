@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import time
 import json
+import xml.sax.saxutils as saxutils
 from collections import defaultdict
 
 # ==========================================
@@ -12,6 +13,9 @@ from collections import defaultdict
 
 def rot_to_trans(r):
     return {'normal': 0, 'inverted': 2, 'left': 1, 'right': 3}.get(r, 0)
+
+def trans_to_rot(t):
+    return {0: 'normal', 1: 'left', 2: 'inverted', 3: 'right'}.get(t, 'normal')
 
 def get_gnome_display_config():
     try:
@@ -22,6 +26,81 @@ def get_gnome_display_config():
     except Exception as e:
         print(f"Error getting GNOME display config: {e}")
         return None
+
+def build_monitors_xml(state):
+    """Serialize a GetCurrentState snapshot into GNOME's own monitors.xml
+    schema. Writing this file ourselves is what makes a rotation actually
+    survive a reboot: ApplyMonitorsConfig's PERSISTENT method only writes
+    monitors.xml *after* the user clicks "Keep Changes" on its confirmation
+    dialog, which nobody is present to click during an unattended kiosk
+    boot, so that path silently never saves anything."""
+    _, monitors, logical_monitors, _ = state
+    lm_blocks = []
+
+    for lm in logical_monitors:
+        x, y, scale, trans, is_primary, phys_monitors, lm_props = lm
+
+        mon_blocks = []
+        for pm in phys_monitors:
+            p_name = pm[0]
+            vendor, product, prod_serial = "unknown", "unknown", "unknown"
+            width, height, rate = 0, 0, 60.0
+            for m_info in monitors:
+                if m_info[0][0] == p_name:
+                    vendor, product, prod_serial = m_info[0][1], m_info[0][2], m_info[0][3]
+                    for m_mode in m_info[1]:
+                        if 'is-current' in m_mode[6]:
+                            width, height, rate = m_mode[1], m_mode[2], m_mode[3]
+                            break
+                    break
+
+            mon_blocks.append(f"""      <monitor>
+        <monitorspec>
+          <connector>{saxutils.escape(str(p_name))}</connector>
+          <vendor>{saxutils.escape(str(vendor))}</vendor>
+          <product>{saxutils.escape(str(product))}</product>
+          <serial>{saxutils.escape(str(prod_serial))}</serial>
+        </monitorspec>
+        <mode>
+          <width>{width}</width>
+          <height>{height}</height>
+          <rate>{rate}</rate>
+        </mode>
+      </monitor>""")
+
+        rot = trans_to_rot(trans)
+        transform_xml = ""
+        if rot != "normal":
+            transform_xml = f"""
+      <transform>
+        <rotation>{rot}</rotation>
+        <flipped>no</flipped>
+      </transform>"""
+
+        lm_blocks.append(f"""    <logicalmonitor>
+      <x>{x}</x>
+      <y>{y}</y>
+      <scale>{scale}</scale>{transform_xml}
+      <primary>{"yes" if is_primary else "no"}</primary>
+{chr(10).join(mon_blocks)}
+    </logicalmonitor>""")
+
+    return f"""<monitors version="2">
+  <configuration>
+{chr(10).join(lm_blocks)}
+  </configuration>
+</monitors>
+"""
+
+def write_monitors_xml(xml_content):
+    """Write monitors.xml straight to disk so GNOME loads this exact,
+    already-correct layout on the next login -- no live PERSISTENT DBus call
+    and no "Keep these display settings?" confirmation dialog involved."""
+    path = Path.home() / ".config" / "monitors.xml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".xml.tmp")
+    tmp.write_text(xml_content)
+    tmp.replace(path)
 
 def apply_rotation_gnome(monitor_name, mode, method=2):
     state = get_gnome_display_config()
@@ -67,14 +146,27 @@ def apply_rotation_gnome(monitor_name, mode, method=2):
         bus = dbus.SessionBus()
         dc = bus.get_object('org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig')
         dc_iface = dbus.Interface(dc, dbus_interface='org.gnome.Mutter.DisplayConfig')
-        
+
+        # Always apply as TEMPORARY (method 1), never PERSISTENT (method 2):
+        # PERSISTENT pops GNOME's "Keep these display settings?" dialog and
+        # reverts the change if nobody answers it within its timeout, which is
+        # exactly what happens unattended -- explaining rotations that "took"
+        # once but silently reverted by the next boot. `method` is accepted
+        # for CLI/back-compat but is intentionally ignored.
         dc_iface.ApplyMonitorsConfig(
-            dbus.UInt32(serial), 
-            dbus.UInt32(method), 
-            new_logical_monitors, 
+            dbus.UInt32(serial),
+            dbus.UInt32(1),
+            new_logical_monitors,
             {}
         )
-        print(f"Successfully rotated {monitor_name} to {mode} (method {method})")
+        print(f"Successfully rotated {monitor_name} to {mode}")
+
+        # Persist the result ourselves by writing monitors.xml directly, since
+        # the PERSISTENT/dialog path above is being deliberately avoided.
+        time.sleep(0.3)
+        new_state = get_gnome_display_config()
+        if new_state:
+            write_monitors_xml(build_monitors_xml(new_state))
         return True
     except Exception as e:
         print(f"Error applying GNOME config: {e}")
@@ -183,15 +275,14 @@ if __name__ == "__main__":
                 with open(config_path, "r") as f:
                     config = json.load(f)
                     
-                    # Screen rotation is NOT re-applied here: any live
-                    # ApplyMonitorsConfig call (regardless of method) makes
-                    # GNOME Shell pop the "Keep these display settings?"
-                    # dialog, which nobody is present to confirm at boot.
-                    # Persisted rotation is restored silently by GNOME itself
-                    # from monitors.xml (written with method=2 when the user
-                    # applies/saves in the UI), so only the touch matrix --
-                    # which depends on whatever orientation actually loaded --
-                    # needs recalculating here.
+                    # Screen rotation is NOT re-applied here: GNOME itself
+                    # reads monitors.xml at login and restores the rotation
+                    # silently, with no dialog, since apply_rotation_gnome()
+                    # writes that file directly (see build_monitors_xml /
+                    # write_monitors_xml) instead of relying on GNOME's own
+                    # PERSISTENT-apply-then-confirm flow. So only the touch
+                    # matrix -- which depends on whatever orientation
+                    # actually loaded -- needs recalculating here.
 
                     # Find the one screen with touch and apply its matrix
                     touch_applied = False

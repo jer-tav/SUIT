@@ -324,11 +324,11 @@ class RotationView(ctk.CTkFrame):
         return config
 
     def _ensure_rotation_autostart(self):
-        """Any live ApplyMonitorsConfig call pops GNOME's unattended "Keep these
-        display settings?" dialog, so apply_rotation.py's no-arg boot path no
-        longer re-applies rotation -- it only recalculates the touch matrix for
-        whatever orientation GNOME's own persisted monitors.xml restores. This
-        autostart entry is what triggers that recalculation on every login."""
+        """apply_rotation.py's no-arg boot path doesn't re-apply rotation --
+        GNOME already restored it silently from monitors.xml (written directly
+        by apply_rotation_gnome(), bypassing GNOME's dialog-driven PERSISTENT
+        apply). This autostart entry only recalculates the touch matrix for
+        whatever orientation actually loaded, on every login."""
         if self.rotation_desktop.exists():
             return
         if not self.autostart_dir.exists():
@@ -420,8 +420,9 @@ class RotationView(ctk.CTkFrame):
             return
 
         # --- No touchscreen on this screen ---
-        # Rotation alone applies live via GNOME (method 2 triggers the confirm
-        # dialog) and does NOT need a reboot.
+        # Rotation alone applies live via GNOME and does NOT need a reboot --
+        # apply_rotation.py applies it as a TEMPORARY change (no confirm dialog)
+        # and persists it itself by writing monitors.xml directly.
         cmd = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} None 2"
 
         def on_done():
@@ -443,7 +444,8 @@ class RotationView(ctk.CTkFrame):
         curr_data = self.screen_data[curr_name]
         curr_mode = self._mode_for(curr_data)
 
-        # Apply the rotation persistently (live, via GNOME).
+        # Apply the rotation live via GNOME; apply_rotation.py persists it by
+        # writing monitors.xml directly, with no confirmation dialog involved.
         cmd = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} None 2"
 
         if self._config_has_touch(config):
