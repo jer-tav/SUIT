@@ -320,7 +320,21 @@ class RotationView(ctk.CTkFrame):
             config[name] = {'rotation': self._mode_for(data), 'touch_device': touch_dev}
         with open(self.rotation_config, "w") as f:
             json.dump(config, f)
+        self._ensure_rotation_autostart()
         return config
+
+    def _ensure_rotation_autostart(self):
+        """GNOME's persistent monitor config isn't reliably reapplied for this
+        kiosk's connectors after a reboot, so apply_rotation.py must be re-run
+        (no-args, config-driven) at every login as a fallback. Without this
+        autostart entry the saved rotation only ever applies once, live."""
+        if self.rotation_desktop.exists():
+            return
+        if not self.autostart_dir.exists():
+            self.autostart_dir.mkdir(parents=True, exist_ok=True)
+        cmd = f"bash -c 'sleep 3; {sys.executable} {self.rotation_script}'"
+        with open(self.rotation_desktop, "w") as f:
+            f.write(f"[Desktop Entry]\nType=Application\nName=SUIT-Rotation\nExec={cmd}\n")
 
     def _config_has_touch(self, config):
         return any(isinstance(c, dict) and c.get('touch_device', "None") != "None"
@@ -389,7 +403,7 @@ class RotationView(ctk.CTkFrame):
             # Rotate to the target AND write the udev rule, then reboot -- with NO
             # further dialogs (once rotated, touch won't match until the reboot
             # finishes, so nothing must require a tap in between).
-            cmd_rot = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} '{touch_dev_name}' 1"
+            cmd_rot = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} '{touch_dev_name}' 2"
 
             busy = ctk.CTkToplevel(self)
             busy.overrideredirect(True)
@@ -429,7 +443,7 @@ class RotationView(ctk.CTkFrame):
         curr_mode = self._mode_for(curr_data)
 
         # Apply the rotation persistently (live, via GNOME).
-        cmd = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} None 1"
+        cmd = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} None 2"
 
         if self._config_has_touch(config):
             # A touch mapping exists; its udev rule only loads at boot, so apply
