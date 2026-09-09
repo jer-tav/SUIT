@@ -184,9 +184,12 @@ if __name__ == "__main__":
                     config = json.load(f)
                     
                     # 1. Apply all screen rotations first
+                    # Method 1 (temporary) pops the "Keep these display settings?"
+                    # confirmation and auto-reverts if nobody answers it at boot,
+                    # so this must be persistent (2) to actually stick unattended.
                     for mon_name, settings in config.items():
                         mode = settings.get('rotation', 'normal')
-                        apply_rotation_gnome(mon_name, mode, 1)
+                        apply_rotation_gnome(mon_name, mode, 2)
                     
                     # 2. Find the one screen with touch and apply its matrix
                     touch_applied = False
