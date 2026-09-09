@@ -183,15 +183,17 @@ if __name__ == "__main__":
                 with open(config_path, "r") as f:
                     config = json.load(f)
                     
-                    # 1. Apply all screen rotations first
-                    # Method 1 (temporary) pops the "Keep these display settings?"
-                    # confirmation and auto-reverts if nobody answers it at boot,
-                    # so this must be persistent (2) to actually stick unattended.
-                    for mon_name, settings in config.items():
-                        mode = settings.get('rotation', 'normal')
-                        apply_rotation_gnome(mon_name, mode, 2)
-                    
-                    # 2. Find the one screen with touch and apply its matrix
+                    # Screen rotation is NOT re-applied here: any live
+                    # ApplyMonitorsConfig call (regardless of method) makes
+                    # GNOME Shell pop the "Keep these display settings?"
+                    # dialog, which nobody is present to confirm at boot.
+                    # Persisted rotation is restored silently by GNOME itself
+                    # from monitors.xml (written with method=2 when the user
+                    # applies/saves in the UI), so only the touch matrix --
+                    # which depends on whatever orientation actually loaded --
+                    # needs recalculating here.
+
+                    # Find the one screen with touch and apply its matrix
                     touch_applied = False
                     for mon_name, settings in config.items():
                         touch = settings.get('touch_device')

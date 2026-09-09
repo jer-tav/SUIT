@@ -324,10 +324,11 @@ class RotationView(ctk.CTkFrame):
         return config
 
     def _ensure_rotation_autostart(self):
-        """GNOME's persistent monitor config isn't reliably reapplied for this
-        kiosk's connectors after a reboot, so apply_rotation.py must be re-run
-        (no-args, config-driven) at every login as a fallback. Without this
-        autostart entry the saved rotation only ever applies once, live."""
+        """Any live ApplyMonitorsConfig call pops GNOME's unattended "Keep these
+        display settings?" dialog, so apply_rotation.py's no-arg boot path no
+        longer re-applies rotation -- it only recalculates the touch matrix for
+        whatever orientation GNOME's own persisted monitors.xml restores. This
+        autostart entry is what triggers that recalculation on every login."""
         if self.rotation_desktop.exists():
             return
         if not self.autostart_dir.exists():
